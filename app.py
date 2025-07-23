@@ -32,7 +32,7 @@ def clean_vehicle_id(vehicle_id, is_body_flag):
         return vehicle_id[:-1]
     return vehicle_id
 
-def def generate_matched_df(master_df, branch_df):
+def generate_matched_df(master_df, branch_df):
     master_df['is_body'] = master_df.apply(lambda row: is_body(row['Vehicle#'], row['License']), axis=1)
     master_df['CleanLicense'] = master_df['License'].apply(clean_license)
     master_df['CleanVehicle#'] = master_df.apply(lambda row: clean_vehicle_id(row['Vehicle#'], row['is_body']), axis=1)
