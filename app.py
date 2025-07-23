@@ -32,7 +32,7 @@ def clean_vehicle_id(vehicle_id, is_body_flag):
         return vehicle_id[:-1]
     return vehicle_id
 
-def generate_matched_df(master_df, branch_df):
+def def generate_matched_df(master_df, branch_df):
     master_df['is_body'] = master_df.apply(lambda row: is_body(row['Vehicle#'], row['License']), axis=1)
     master_df['CleanLicense'] = master_df['License'].apply(clean_license)
     master_df['CleanVehicle#'] = master_df.apply(lambda row: clean_vehicle_id(row['Vehicle#'], row['is_body']), axis=1)
@@ -49,6 +49,11 @@ def generate_matched_df(master_df, branch_df):
         how='right'
     ).rename(columns={'CleanVehicle#': 'Tractor', 'Route': 'Route'})
 
+    if 'Tractor' not in merged.columns:
+        merged['Tractor'] = None
+    if 'Route' not in merged.columns:
+        merged['Route'] = None
+
     merged = pd.merge(
         merged,
         bodies[['CleanLicense', 'CleanVehicle#']],
@@ -56,6 +61,10 @@ def generate_matched_df(master_df, branch_df):
         how='left'
     ).rename(columns={'CleanVehicle#': 'Body'})
 
+    if 'Body' not in merged.columns:
+        merged['Body'] = None
+
+    # Safely create indicators
     merged['has_both'] = merged['Tractor'].notna() & merged['Body'].notna()
     merged['only_tractor'] = merged['Tractor'].notna() & merged['Body'].isna()
     merged['only_body'] = merged['Tractor'].isna() & merged['Body'].notna()
@@ -67,6 +76,7 @@ def generate_matched_df(master_df, branch_df):
     merged = merged[['Tractor', 'Body', 'CleanLicense', 'Route', 'Action', 'Remark', 'Date Aligned']]
     merged = merged.rename(columns={'CleanLicense': 'License'})
 
+    # Return in order: both → only tractor → only body
     return pd.concat([
         merged[merged['has_both']],
         merged[merged['only_tractor']],
