@@ -8,9 +8,9 @@ st.title("🚚 Vehicle Daily Report Generator (with Route and Smart Merge)")
 
 uploaded_file = st.file_uploader("📤 Upload 'master_vehicle_database_alignment.xlsx'", type="xlsx")
 
-# ===============================
+# ============================
 # Helper Functions
-# ===============================
+# ============================
 
 def clean_license(license_number):
     if not isinstance(license_number, str):
@@ -19,7 +19,7 @@ def clean_license(license_number):
         return license_number[:-1]
     return license_number
 
-def is_body(vehicle_id):
+def is_body_id(vehicle_id):
     if not isinstance(vehicle_id, str):
         return False
     return (
@@ -29,37 +29,39 @@ def is_body(vehicle_id):
         vehicle_id.startswith("DT")
     )
 
-def extract_vehicle_by_type(df, vehicle_type='tractor'):
-    df = df.copy()
-    df['is_body'] = df['Vehicle#'].apply(is_body)
-    df['CleanLicense'] = df['License'].apply(clean_license)
-    
-    if vehicle_type == 'tractor':
-        return df[~df['is_body']][['CleanLicense', 'Vehicle#', 'Route']].drop_duplicates()
-    else:
-        return df[df['is_body']][['CleanLicense', 'Vehicle#']].drop_duplicates()
+def clean_vehicle_id(vehicle_id):
+    if not isinstance(vehicle_id, str):
+        return vehicle_id
+    if vehicle_id.endswith("T") and not vehicle_id.endswith("THT"):
+        return vehicle_id[:-1]
+    return vehicle_id
 
 def generate_branch_output(master_df, branch_df):
     branch_df = branch_df.copy()
     branch_df['CleanLicense'] = branch_df['License'].apply(clean_license)
-    unique_licenses = branch_df['CleanLicense'].unique()
+    unique_licenses = branch_df['CleanLicense'].dropna().unique()
 
-    tractors = extract_vehicle_by_type(master_df, 'tractor')
-    bodies = extract_vehicle_by_type(master_df, 'body')
+    # Tag and clean master list
+    master_df['is_body'] = master_df['Vehicle#'].apply(is_body_id)
+    master_df['CleanLicense'] = master_df['License'].apply(clean_license)
+    master_df['CleanVehicle'] = master_df.apply(lambda row: clean_vehicle_id(row['Vehicle#']) if row['is_body'] else row['Vehicle#'], axis=1)
 
-    rows = []
+    # Extract Tractor and Body data
+    tractors = master_df[~master_df['is_body']][['CleanLicense', 'CleanVehicle', 'Route']].drop_duplicates()
+    bodies = master_df[master_df['is_body']][['CleanLicense', 'CleanVehicle']].drop_duplicates()
 
+    final_rows = []
     for lic in unique_licenses:
-        tractor_row = tractors[tractors['CleanLicense'] == lic].head(1)
-        body_row = bodies[bodies['CleanLicense'] == lic].head(1)
+        tractor = tractors[tractors['CleanLicense'] == lic]
+        body = bodies[bodies['CleanLicense'] == lic]
 
-        tractor = tractor_row['Vehicle#'].values[0] if not tractor_row.empty else ""
-        body = body_row['Vehicle#'].values[0] if not body_row.empty else ""
-        route = tractor_row['Route'].values[0] if not tractor_row.empty else ""
+        tractor_id = tractor['CleanVehicle'].values[0] if not tractor.empty else ""
+        body_id = body['CleanVehicle'].values[0] if not body.empty else ""
+        route = tractor['Route'].values[0] if not tractor.empty else ""
 
-        rows.append({
-            "Tractor": tractor,
-            "Body": body,
+        final_rows.append({
+            "Tractor": tractor_id,
+            "Body": body_id,
             "License": lic,
             "Route": route,
             "Action": "Vehicle to be presented at Tyre-Bay",
@@ -67,9 +69,9 @@ def generate_branch_output(master_df, branch_df):
             "Date Aligned": ""
         })
 
-    df_final = pd.DataFrame(rows)
+    df_final = pd.DataFrame(final_rows)
 
-    # Sorting: both → only tractor → only body
+    # Order: both → only Tractor → only Body
     df_final["has_both"] = df_final["Tractor"].ne("") & df_final["Body"].ne("")
     df_final["only_tractor"] = df_final["Tractor"].ne("") & df_final["Body"].eq("")
     df_final["only_body"] = df_final["Tractor"].eq("") & df_final["Body"].ne("")
@@ -82,9 +84,9 @@ def generate_branch_output(master_df, branch_df):
 
     return df_sorted.drop(columns=["has_both", "only_tractor", "only_body"]).reset_index(drop=True)
 
-# ===============================
+# ============================
 # Main App Logic
-# ===============================
+# ============================
 
 if uploaded_file:
     try:
@@ -101,15 +103,15 @@ if uploaded_file:
             obajana_result = generate_branch_output(master_df, obajana_df)
             ibese_result = generate_branch_output(master_df, ibese_df)
 
-            # Save results to Excel
+            # Save to Excel
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 obajana_result.to_excel(writer, sheet_name='Obajana Result', index=False)
                 ibese_result.to_excel(writer, sheet_name='Ibese Result', index=False)
 
-                # Freeze top row in all result sheets
-                for ws in writer.book.worksheets:
-                    ws.freeze_panes = "A2"
+                # Freeze top rows
+                for sheet in writer.book.worksheets:
+                    sheet.freeze_panes = sheet["A2"]
 
             st.success("✅ Report generated successfully!")
 
