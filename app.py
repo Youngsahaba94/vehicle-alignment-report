@@ -3,10 +3,12 @@ import pandas as pd
 from datetime import datetime
 from io import BytesIO
 
-st.set_page_config(page_title="Vehicle Alignment Report", page_icon="🚚")
-st.title("🚚 Vehicle Daily Report Generator (Web Version)")
+st.set_page_config(page_title="Vehicle Daily Report Generator", page_icon="🚚")
+st.title("🚚 Vehicle Daily Report Generator (with Route and Smart Save)")
 
-uploaded_file = st.file_uploader("Upload master_vehicle_database_alignment.xlsx", type="xlsx")
+uploaded_file = st.file_uploader("📤 Upload 'master_vehicle_database_alignment.xlsx'", type="xlsx")
+
+# === Helper functions ===
 
 def clean_license(license_number):
     if not isinstance(license_number, str):
@@ -32,7 +34,16 @@ def clean_vehicle_id(vehicle_id, is_body_flag):
         return vehicle_id[:-1]
     return vehicle_id
 
+# === Core processing function ===
+
 def generate_matched_df(master_df, branch_df):
+    # Ensure columns exist
+    if 'Vehicle#' not in master_df.columns or 'License' not in master_df.columns or 'Route' not in master_df.columns:
+        raise ValueError("Sheet 'master vehicle list' must contain 'Vehicle#', 'License', and 'Route' columns.")
+    if 'License' not in branch_df.columns:
+        raise ValueError("Branch sheet must contain 'License' column.")
+
+    # Prep master
     master_df['is_body'] = master_df.apply(lambda row: is_body(row['Vehicle#'], row['License']), axis=1)
     master_df['CleanLicense'] = master_df['License'].apply(clean_license)
     master_df['CleanVehicle#'] = master_df.apply(lambda row: clean_vehicle_id(row['Vehicle#'], row['is_body']), axis=1)
@@ -42,18 +53,20 @@ def generate_matched_df(master_df, branch_df):
 
     branch_df['CleanLicense'] = branch_df['License'].apply(clean_license)
 
+    # Merge tractors first
     merged = pd.merge(
-        tractors[['CleanLicense', 'CleanVehicle#', 'Route']],
         branch_df[['CleanLicense']],
+        tractors[['CleanLicense', 'CleanVehicle#', 'Route']],
         on='CleanLicense',
-        how='right'
-    ).rename(columns={'CleanVehicle#': 'Tractor', 'Route': 'Route'})
+        how='left'
+    ).rename(columns={'CleanVehicle#': 'Tractor'})
 
     if 'Tractor' not in merged.columns:
         merged['Tractor'] = None
     if 'Route' not in merged.columns:
         merged['Route'] = None
 
+    # Merge bodies
     merged = pd.merge(
         merged,
         bodies[['CleanLicense', 'CleanVehicle#']],
@@ -64,11 +77,12 @@ def generate_matched_df(master_df, branch_df):
     if 'Body' not in merged.columns:
         merged['Body'] = None
 
-    # Safely create indicators
+    # Create status flags
     merged['has_both'] = merged['Tractor'].notna() & merged['Body'].notna()
     merged['only_tractor'] = merged['Tractor'].notna() & merged['Body'].isna()
     merged['only_body'] = merged['Tractor'].isna() & merged['Body'].notna()
 
+    # Add extra fields
     merged['Action'] = "Vehicle to be presented at Tyre-Bay"
     merged['Remark'] = "Vehicle not yet Presented"
     merged['Date Aligned'] = ""
@@ -76,41 +90,48 @@ def generate_matched_df(master_df, branch_df):
     merged = merged[['Tractor', 'Body', 'CleanLicense', 'Route', 'Action', 'Remark', 'Date Aligned']]
     merged = merged.rename(columns={'CleanLicense': 'License'})
 
-    # Return in order: both → only tractor → only body
+    # Reorder rows
     return pd.concat([
         merged[merged['has_both']],
         merged[merged['only_tractor']],
         merged[merged['only_body']]
     ])
 
+# === Main Streamlit app ===
+
 if uploaded_file:
     try:
         xl = pd.ExcelFile(uploaded_file)
-        required_sheets = ['master vehicle list', 'Obajana', 'Ibese']
+        sheets_needed = ['master vehicle list', 'Obajana', 'Ibese']
 
-        if not all(sheet in xl.sheet_names for sheet in required_sheets):
-            st.error("One or more required sheets are missing: 'master vehicle list', 'Obajana', 'Ibese'")
+        if not all(sheet in xl.sheet_names for sheet in sheets_needed):
+            st.error("❌ One or more required sheets are missing: 'master vehicle list', 'Obajana', 'Ibese'")
         else:
             master_df = xl.parse('master vehicle list')
             obajana_df = xl.parse('Obajana')
             ibese_df = xl.parse('Ibese')
 
-            obajana_final = generate_matched_df(master_df.copy(), obajana_df.copy())
-            ibese_final = generate_matched_df(master_df.copy(), ibese_df.copy())
+            obajana_result = generate_matched_df(master_df, obajana_df)
+            ibese_result = generate_matched_df(master_df, ibese_df)
 
+            # Prepare Excel output
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                obajana_final.to_excel(writer, sheet_name='Obajana Result', index=False)
-                ibese_final.to_excel(writer, sheet_name='Ibese Result', index=False)
+                obajana_result.to_excel(writer, sheet_name='Obajana Result', index=False)
+                ibese_result.to_excel(writer, sheet_name='Ibese Result', index=False)
+
+                # Freeze header rows
+                for sheet in writer.book.worksheets:
+                    sheet.freeze_panes = "A2"
 
             st.success("✅ Report generated successfully!")
 
             st.download_button(
-                label="🔹 Download Processed Report",
+                label="📥 Download Result Excel",
                 data=output.getvalue(),
-                file_name=f"daily_alignment_output_{datetime.today().strftime('%Y-%m-%d')}.xlsx",
+                file_name=f"alignment_result_{datetime.now().date()}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
     except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.error(f"❌ An error occurred: {e}")
